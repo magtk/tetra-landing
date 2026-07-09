@@ -44,13 +44,11 @@ The tetrahedron is only the beginning.
 The long-term goal is to build a collection of interactive tools that help people think, learn and explore complex relationships through visual and spatial representations.
 
 ## Project Anatomy ;)
-
 ```
-Head  (concept & design):           MagT       ,_,
-Eyes  (exploration & insight):      ambr0wl   (O,O)
-Hands (development):                MagTk     (   )
-Feet  (reality check & grounding):  anovi     -"-"-
+Head  (concept & design):           MagT        ,_,
+Eyes  (exploration & insight):      ambr0wl    (O,O)
+Hands (development):                MagTk      (   )
+Feet  (reality check & grounding):  anovi      -"-"-
+>      Curious?     --------->      https://magt.ovh
 ```
-
-
 

@@ -1,0 +1,987 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Czwórca — cztery persony, jeden autor</title>
+
+<!--
+  ============================================================================
+  CZWÓRCA — landing page
+  ----------------------------------------------------------------------------
+  Jeden plik, zero build-toolów. Three.js wciągnięty z CDN (UMD, globalny THREE).
+
+  STRUKTURA PLIKU:
+    1) <style>   — design tokens (CSS vars) + layout + intro (siatka + sowa)
+    2) <body>    — overlay intro, canvas na scenę 3D, podpis, fallback bez WebGL
+    3) <script>  — CONFIG (łatwa edycja kolorów/tekstu/URLi) + logika Three.js
+
+  Żeby zmienić kolorystykę/teksty ścian: edytuj obiekt CONFIG.faces niżej.
+  ============================================================================
+-->
+
+<style>
+  /* ---------------------------------------------------------------------
+     DESIGN TOKENS — paleta „warsztatu wiedzy”: ciemny fundament + ciepły akcent.
+     Zgodna z istniejącą marką (amber/terakota/kremowy), łatwa do podmiany.
+     --------------------------------------------------------------------- */
+  :root{
+    --bg:        #1A1617; /* głęboka, ciepła czerń — nie czysty #000 */
+    --ink:       #EDE3DF; /* kremowy tekst na ciemnym tle */
+    --amber:     #E6A732; /* akcent — poświata, linki, kursor uwagi */
+    --terracotta:#AB5A4B; /* akcent drugorzędny */
+    --muted:     #8b8078; /* podpisy, drobny tekst */
+    --rule:      rgba(237,227,223,0.12);
+
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-mono:    'DM Mono', 'JetBrains Mono', monospace;
+    --font-owl:     'JetBrains Mono', monospace; /* kropka w zerze = oczy sowy */
+  }
+
+  *{ box-sizing: border-box; }
+
+  html, body{
+    margin:0; padding:0; height:100%;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Delikatna winieta + ziarno na tle sceny — nadaje głębi bez postprocessingu */
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:1;
+    background:
+      radial-gradient(ellipse at 50% 40%, rgba(230,167,50,0.05), transparent 60%),
+      radial-gradient(ellipse at 50% 100%, rgba(0,0,0,0.65), transparent 70%);
+  }
+
+  #stage{
+    position:relative; width:100vw; height:100vh;
+  }
+
+  canvas#scene{
+    display:block; width:100%; height:100%;
+    opacity:0;
+    cursor: grab;
+    transition: opacity 1.1s ease;
+  }
+  canvas#scene:active{ cursor: grabbing; }
+  canvas#scene.visible{ opacity:1; }
+
+  /* ---------------------------------------------------------------------
+     PODPIS pod obiektem
+     --------------------------------------------------------------------- */
+  #caption{
+    position:fixed; left:0; right:0; bottom:6.5vh;
+    text-align:center; z-index:2;
+    font-family: var(--font-display);
+    font-style: italic;
+    font-weight: 400;
+    letter-spacing:0.02em;
+    color: var(--muted);
+    font-size: clamp(0.85rem, 1.6vw, 1.15rem);
+    opacity:0;
+    transition: opacity 1.4s ease 0.6s;
+    user-select:none;
+  }
+  #caption.visible{ opacity:1; }
+  #caption .accent{ color: var(--amber); font-style:normal; }
+  #captionHint{
+    font-family: var(--font-mono);
+    font-style: normal;
+    font-size: 0.72em;
+    opacity: 0.6;
+    letter-spacing: 0.01em;
+  }
+  @media (max-width: 560px){ #captionHint{ display:none; } } /* na telefonie gest jest oczywisty */
+
+  /* mała etykieta u góry — nazwa projektu, subtelna, nie krzycząca */
+  #eyebrow{
+    position:fixed; top:5vh; left:0; right:0; text-align:center; z-index:2;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    letter-spacing:0.35em;
+    text-transform:uppercase;
+    color: var(--muted);
+    opacity:0;
+    transition: opacity 1.2s ease 0.4s;
+  }
+  #eyebrow.visible{ opacity:1; }
+
+  /* ---------------------------------------------------------------------
+     INTRO OVERLAY — rozłożona siatka czworościanu + sowa ASCII w środku.
+     Sekwencja: (1) siatka stoi płasko, sowa w centrum core-trójkąta
+                (2) .growing — siatka rośnie
+                (3) .folding — skrzydła składają się do środka, całość
+                    obraca się w 3D (rotateY), po czym overlay znika,
+                    a w jego miejsce wjeżdża już obracająca się bryła 3D.
+     --------------------------------------------------------------------- */
+  #intro{
+    position:fixed; inset:0; z-index:10;
+    background: var(--bg);
+    display:flex; align-items:center; justify-content:center;
+    perspective: 1100px; /* kontekst 3D dla dziecka .intro-net */
+    transition: opacity 0.9s ease;
+  }
+  #intro.fade-out{ opacity:0; pointer-events:none; }
+
+  /* .intro-net to jedyny element, który się fizycznie powiększa i obraca —
+     dzięki temu sowa (część SVG) rośnie i obraca się razem z siatką */
+  .intro-net{
+    width: min(60vw, 340px);
+    transition: transform 1.05s cubic-bezier(.45,0,.4,1);
+    transform-style: preserve-3d;
+  }
+  #intro.growing .intro-net,
+  #intro.folding .intro-net{
+    transform: scale(1.42) rotateY(430deg);
+  }
+
+  #intro svg{
+    display:block; width:100%; height:auto; overflow:visible;
+  }
+  #intro polygon{
+    fill: rgba(230,167,50,0.05);
+    stroke: var(--amber);
+    stroke-width: 1;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: transform 0.95s cubic-bezier(.5,0,.5,1), opacity 0.8s ease;
+  }
+  /* skrzydła "składają się" — kurczą się, delikatnie skręcają i znikają,
+     każde w stronę środka siatki (core) */
+  #intro.folding polygon.flap{ opacity: 0; }
+  #intro.folding polygon.flap.flap-a{ transform: scale(0.08) rotate(40deg) translateY(18px); }
+  #intro.folding polygon.flap.flap-b{ transform: scale(0.08) rotate(-40deg) translateX(14px) translateY(-10px); }
+  #intro.folding polygon.flap.flap-c{ transform: scale(0.08) rotate(40deg) translateX(-14px) translateY(-10px); }
+  #intro.folding polygon.core{
+    stroke: var(--ink);
+    transform: scale(1.1);
+  }
+
+  /* sowa — w foreignObject wewnątrz SVG, więc jest CZĘŚCIĄ siatki:
+     zawsze dokładnie w środku core-trójkąta, rośnie i obraca się z nią */
+  #owl{
+    width:100%; height:100%;
+    display:flex; align-items:center; justify-content:center;
+    margin:0;
+    font-family: var(--font-owl);
+    font-size: 11px;
+    line-height:1.15;
+    color: var(--amber);
+    text-align:center;
+    white-space:pre;
+    text-shadow: 0 0 6px rgba(230,167,50,0.35);
+    transition: opacity 0.5s ease;
+  }
+  #intro.folding #owl{ opacity:0; }
+
+  @media (prefers-reduced-motion: reduce){
+    #intro polygon, #owl, canvas#scene, #caption, #eyebrow, .intro-net{ transition-duration: 0.2s !important; }
+    #intro.growing .intro-net, #intro.folding .intro-net{ transform: scale(1.05); }
+  }
+
+  /* ---------------------------------------------------------------------
+     FALLBACK — bez WebGL
+     --------------------------------------------------------------------- */
+  #fallback{
+    display:none;
+    position:fixed; inset:0; z-index:5;
+    flex-direction:column; align-items:center; justify-content:center;
+    text-align:center; gap:1.4rem; padding:2rem;
+  }
+  #fallback.show{ display:flex; }
+  #fallback h1{
+    font-family: var(--font-display); font-weight:500; font-size:1.6rem;
+    margin:0 0 0.2rem 0; color:var(--ink);
+  }
+  #fallback p{ color:var(--muted); max-width:32rem; margin:0; font-size:0.95rem; }
+  #fallback nav{
+    display:flex; flex-wrap:wrap; gap:0.8rem; justify-content:center; margin-top:0.6rem;
+  }
+  #fallback a{
+    color:var(--bg); background:var(--amber);
+    text-decoration:none; padding:0.6rem 1.1rem;
+    border-radius:2px; font-size:0.85rem; letter-spacing:0.03em;
+    font-family:var(--font-mono);
+    transition: background 0.2s ease;
+  }
+  #fallback a:hover{ background:var(--terracotta); color:var(--ink); }
+
+  /* focus widoczny dla dostępności klawiaturowej (linki fallback) */
+  a:focus-visible, button:focus-visible{
+    outline:2px solid var(--amber); outline-offset:3px;
+  }
+
+  /* Import fontów — Fraunces (display), DM Mono (UI), JetBrains Mono (sowa) */
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,400;0,500;1,400&family=DM+Mono:wght@400;500&family=JetBrains+Mono:wght@400;600&display=swap');
+</style>
+</head>
+<body>
+
+  <!-- ============ INTRO: rozłożona siatka czworościanu + sowa ASCII ============ -->
+  <div id="intro" aria-hidden="true">
+    <!--
+      Siatka czworościanu: duży trójkąt równoboczny podzielony na 4 mniejsze
+      (klasyczna siatka = "net") — środkowy (odwrócony) trójkąt to "core",
+      trzy narożne to "flaps". Sowa siedzi w foreignObject na środku core,
+      więc jest trwale wyśrodkowana i rośnie/obraca się razem z siatką.
+      Cała siatka (.intro-net) najpierw rośnie i obraca się w 3D, skrzydła
+      składają się do środka, po czym overlay znika i wjeżdża bryła 3D.
+    -->
+    <div class="intro-net">
+      <svg viewBox="0 0 300 240">
+        <!-- flap: wierzchołek A (góra) -->
+        <polygon class="flap flap-a" points="150,20 85,120 215,120"></polygon>
+        <!-- flap: wierzchołek B (dół-lewo) -->
+        <polygon class="flap flap-b" points="20,220 85,120 150,220"></polygon>
+        <!-- flap: wierzchołek C (dół-prawo) -->
+        <polygon class="flap flap-c" points="280,220 215,120 150,220"></polygon>
+        <!-- core: środkowy, odwrócony trójkąt — centroid ≈ (150,153) -->
+        <polygon class="core" points="85,120 215,120 150,220"></polygon>
+        <!-- sowa wyśrodkowana dokładnie na centroidzie core -->
+        <foreignObject x="85" y="118" width="130" height="70">
+          <pre id="owl" xmlns="http://www.w3.org/1999/xhtml">          ,_,
+         (O,O)
+         (   )
+         ="="=</pre>
+        </foreignObject>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ============ SCENA 3D ============ -->
+  <div id="stage">
+    <div id="eyebrow">Czwórca</div>
+    <canvas id="scene"></canvas>
+    <div id="caption">
+    Four personas, <span class="accent">one</span> author.
+    <span id="captionHint"> — drag to turn, click a face to enter.</span>
+  </div>
+  </div>
+
+  <!-- ============ FALLBACK bez WebGL ============ -->
+  <div id="fallback">
+    <h1>Czwórca</h1>
+    <p>
+      Twoja przeglądarka nie obsługuje WebGL, więc interaktywny czworościan
+      się nie wyświetli. Oto te same cztery drogi — wybierz personę:
+    </p>
+    <nav>
+      <a href="/magt/">MagT</a>
+      <a href="/magtk/">MagTk</a>
+      <a href="/ambr0wl/">ambr0wl</a>
+      <a href="/anovi/">Ano Vimier</a>
+    </nav>
+  </div>
+
+<!-- Three.js r128 — wersja zgodna z resztą stron w rodzinie Czwórcy -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  "use strict";
+
+  /* =========================================================================
+     CONFIG — tu zmieniasz kolory, tekst i adresy ścian. Nic innego w kodzie
+     poniżej nie trzeba ruszać, żeby przestylować persony.
+     ========================================================================= */
+  const CONFIG = {
+    rotationSpeed: 0.12,       // rad/s — "leniwy" obrót
+    hoverLerp: 0.12,           // płynność reakcji hover
+    introDuration: 2600,       // ms — jak długo stoi siatka + sowa
+    growDuration: 1050,        // ms — czas animacji "rośnie + obraca się"
+    foldDuration: 550,         // ms — dodatkowy czas na złożenie skrzydeł przed przejściem w 3D
+
+    faces: [
+      {
+        id: "magt",
+        label: "MagT",
+        sub: "Architect",
+        url: "/magt/",
+        base: "#E7D9B8",        // pergamin / papier
+        ink: "#2c2419",
+        texture: "parchment",
+        roughness: 0.85,
+        metalness: 0.02,
+        emissive: "#E7D9B8",
+        emissiveBase: 0.05
+      },
+      {
+        id: "magtk",
+        label: "MagTk",
+        sub: "Builder",
+        url: "/magtk/",
+        base: "#3E5A70",        // steel blue / szczotkowany metal
+        ink: "#EAF1F5",
+        texture: "steel",
+        roughness: 0.35,
+        metalness: 0.55,
+        emissive: "#3E5A70",
+        emissiveBase: 0.05
+      },
+      {
+        id: "ambr0wl",
+        label: "ambr0wl",
+        sub: "Observer",
+        url: "/ambr0wl/",
+        base: "#151210",        // CRT amber terminal
+        ink: "#E6A732",
+        texture: "crt",
+        roughness: 0.5,
+        metalness: 0.1,
+        emissive: "#E6A732",
+        emissiveBase: 0.35
+      },
+      {
+        id: "anovi",
+        label: "Ano Vimier",
+        sub: "Reflector",
+        url: "/anovi/",
+        base: "#2E1626",        // przygaszony burgund/fiolet
+        ink: "#EDE3DF",
+        texture: "palimpsest",
+        roughness: 0.6,
+        metalness: 0.08,
+        emissive: "#AB5A4B",
+        emissiveBase: 0.06
+      }
+    ]
+  };
+
+  /* =========================================================================
+     0) Detekcja WebGL — jeśli brak, pokaż fallback i przerwij.
+     ========================================================================= */
+  function hasWebGL(){
+    try{
+      const c = document.createElement('canvas');
+      return !!(window.WebGLRenderingContext &&
+        (c.getContext('webgl') || c.getContext('experimental-webgl')));
+    }catch(e){ return false; }
+  }
+
+  if (!hasWebGL()){
+    document.getElementById('intro').style.display = 'none';
+    document.getElementById('fallback').classList.add('show');
+    return;
+  }
+
+  const prefersReducedMotion = window.matchMedia(
+    '(prefers-reduced-motion: reduce)'
+  ).matches;
+
+  /* =========================================================================
+     1) INTRO — sekwencja: siatka stoi -> rośnie i obraca się (.growing) ->
+        skrzydła się składają (.folding, dodane do tej samej klasy .intro-net
+        transform, więc obrót i wzrost trwają płynnie przez cały czas) ->
+        overlay znika, wjeżdża już wirująca bryła 3D.
+     ========================================================================= */
+  const introEl = document.getElementById('intro');
+
+  function runIntro(){
+    const standDelay = prefersReducedMotion ? 300 : CONFIG.introDuration;
+    const growTime = prefersReducedMotion ? 200 : CONFIG.growDuration;
+    const foldTime = prefersReducedMotion ? 150 : CONFIG.foldDuration;
+
+    setTimeout(() => {
+      // faza 1: siatka zaczyna rosnąć i obracać się w 3D (transform na .intro-net)
+      introEl.classList.add('growing');
+
+      setTimeout(() => {
+        // faza 2: skrzydła składają się do środka, sowa gaśnie — nadal w trakcie obrotu
+        introEl.classList.add('folding');
+
+        setTimeout(() => {
+          // faza 3: przejście w rzeczywistą, już obracającą się bryłę 3D
+          introEl.classList.add('fade-out');
+          canvas.classList.add('visible');
+          document.getElementById('caption').classList.add('visible');
+          document.getElementById('eyebrow').classList.add('visible');
+          setTimeout(() => { introEl.remove(); }, 950);
+        }, foldTime);
+      }, growTime * 0.35); // składanie startuje, gdy wzrost/obrót jest już w toku
+    }, standDelay);
+  }
+
+  /* =========================================================================
+     2) TEKSTURY — proste, generowane w <canvas>, jedna funkcja per styl.
+        Każda rysuje tło + fakturę + wycentrowany napis z nazwą persony.
+     ========================================================================= */
+  function makeCanvas(){
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 512;
+    return c;
+  }
+
+  function drawLabel(ctx, face){
+    ctx.save();
+    ctx.translate(256, 256);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = face.ink;
+    ctx.font = "500 46px 'Fraunces', serif";
+    ctx.fillText(face.label, 0, -6);
+    ctx.font = "400 16px 'DM Mono', monospace";
+    ctx.globalAlpha = 0.75;
+    ctx.textTransform = 'uppercase';
+    ctx.fillText(face.sub.toUpperCase(), 0, 34);
+    ctx.restore();
+  }
+
+  // MagT — pergamin: ciepły beż, delikatne włókna papieru + winieta
+  function textureParchment(face){
+    const c = makeCanvas(); const ctx = c.getContext('2d');
+    ctx.fillStyle = face.base; ctx.fillRect(0,0,512,512);
+    // włókna papieru
+    ctx.globalAlpha = 0.06;
+    for(let i=0;i<260;i++){
+      ctx.strokeStyle = i % 2 ? '#5a4a2f' : '#fffdf5';
+      ctx.beginPath();
+      const y = Math.random()*512;
+      ctx.moveTo(0, y);
+      ctx.bezierCurveTo(170, y+(Math.random()*20-10), 340, y+(Math.random()*20-10), 512, y);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // winieta (starzenie krawędzi)
+    const g = ctx.createRadialGradient(256,256,150,256,256,360);
+    g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(90,60,30,0.35)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,512,512);
+    drawLabel(ctx, face);
+    return c;
+  }
+
+  // MagTk — szczotkowany metal + cienkie linie rysunku technicznego
+  function textureSteel(face){
+    const c = makeCanvas(); const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0,0,512,512);
+    g.addColorStop(0,'#4c6d84'); g.addColorStop(0.5,face.base); g.addColorStop(1,'#2a3d4c');
+    ctx.fillStyle = g; ctx.fillRect(0,0,512,512);
+    // szczotkowanie — cienkie poziome linie
+    ctx.globalAlpha = 0.08;
+    for(let y=0;y<512;y+=2){
+      ctx.strokeStyle = Math.random()>0.5 ? '#ffffff' : '#000000';
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(512,y+(Math.random()*2-1)); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+    // siatka konstrukcyjna (rysunek techniczny)
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'; ctx.lineWidth = 1;
+    for(let i=64;i<512;i+=64){
+      ctx.beginPath(); ctx.moveTo(i,0); ctx.lineTo(i,512); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,i); ctx.lineTo(512,i); ctx.stroke();
+    }
+    // narożniki-krzyżyki jak na planie technicznym
+    ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+    [[24,24],[488,24],[24,488],[488,488]].forEach(([x,y])=>{
+      ctx.beginPath(); ctx.moveTo(x-10,y); ctx.lineTo(x+10,y);
+      ctx.moveTo(x,y-10); ctx.lineTo(x,y+10); ctx.stroke();
+    });
+    drawLabel(ctx, face);
+    return c;
+  }
+
+  // ambr0wl — terminal CRT: skanlinie, szum, poświata
+  function textureCRT(face){
+    const c = makeCanvas(); const ctx = c.getContext('2d');
+    ctx.fillStyle = face.base; ctx.fillRect(0,0,512,512);
+    // szum
+    const imgData = ctx.getImageData(0,0,512,512);
+    for(let i=0;i<imgData.data.length;i+=4){
+      const n = Math.random()*14;
+      imgData.data[i] += n; imgData.data[i+1] += n*0.9; imgData.data[i+2] += n*0.4;
+    }
+    ctx.putImageData(imgData,0,0);
+    // skanlinie
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = '#000000';
+    for(let y=0;y<512;y+=3){ ctx.fillRect(0,y,512,1); }
+    ctx.globalAlpha = 1;
+    // centralna poświata amber
+    const g = ctx.createRadialGradient(256,256,20,256,256,300);
+    g.addColorStop(0,'rgba(230,167,50,0.25)'); g.addColorStop(1,'rgba(230,167,50,0)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,512,512);
+    ctx.strokeStyle = 'rgba(230,167,50,0.4)'; ctx.lineWidth = 6;
+    ctx.strokeRect(3,3,506,506);
+    drawLabel(ctx, face);
+    return c;
+  }
+
+  // Ano Vimier — palimpsest: warstwy przygaszonego tekstu na burgundzie/fiolecie
+  function texturePalimpsest(face){
+    const c = makeCanvas(); const ctx = c.getContext('2d');
+    ctx.fillStyle = face.base; ctx.fillRect(0,0,512,512);
+    // warstwy "wymazanego" pisma
+    ctx.font = "italic 15px 'Fraunces', serif";
+    for(let row=0; row<22; row++){
+      ctx.globalAlpha = 0.05 + Math.random()*0.05;
+      ctx.fillStyle = '#EDE3DF';
+      let x = -20;
+      const y = 20 + row*22;
+      while(x < 540){
+        ctx.fillText('esej — glosa — dziennik — ', x, y);
+        x += 220;
+      }
+    }
+    ctx.globalAlpha = 1;
+    // plama atramentu (winieta w chłodniejszym odcieniu)
+    const g = ctx.createRadialGradient(256,256,80,256,256,360);
+    g.addColorStop(0,'rgba(0,0,0,0)'); g.addColorStop(1,'rgba(10,4,10,0.5)');
+    ctx.fillStyle = g; ctx.fillRect(0,0,512,512);
+    drawLabel(ctx, face);
+    return c;
+  }
+
+  const TEXTURE_FN = {
+    parchment: textureParchment,
+    steel: textureSteel,
+    crt: textureCRT,
+    palimpsest: texturePalimpsest
+  };
+
+  /* =========================================================================
+     3) SCENA THREE.JS
+     ========================================================================= */
+  const canvas = document.getElementById('scene');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x030308); // niemal-czerń, bardzo ciemny kosmos (nie #000)
+
+  /* =========================================================================
+     PRZESTRZEŃ POJĘĆ — słowa zbudowane przez lata pracy, unoszące się w tle.
+     Nie latają, nie wirują — każde istnieje w swoim miejscu, "oddychając"
+     własnym, niezsynchronizowanym rytmem (jak diody Nokii). Bliżej kamery =
+     ostrzej i większe; dalej = rozmyte i mniejsze (głębia).
+     ========================================================================= */
+  const CONCEPTS = [
+    { text: "AI",              color: [0x88D6FF, 0xB5E8FF], pulls: ["TensorFlow","PyTorch","Explainability"] },
+    { text: "Machine Learning",color: [0x88D6FF, 0xB5E8FF], pulls: ["AI","TensorFlow"] },
+    { text: "TensorFlow",      color: [0x88D6FF, 0xC7EEFF], pulls: ["AI"] },
+    { text: "PyTorch",         color: [0x88D6FF, 0xC7EEFF], pulls: ["AI"] },
+    { text: "Explainability",  color: [0x9AD8FF, 0xC7EEFF], pulls: ["AI"] },
+    { text: "Bioinformatics",  color: [0x6FD98C, 0xA8F0BC], pulls: ["Genomics","Computational Biology"] },
+    { text: "Genomics",        color: [0x6FD98C, 0xA8F0BC], pulls: ["Bioinformatics"] },
+    { text: "Computational Biology", color: [0x6FD98C, 0xB6F2C6], pulls: ["Bioinformatics"] },
+    { text: "Resilience",      color: [0xE6A732, 0xF4CE7E], pulls: [] },
+    { text: "Cloud",           color: [0x7A7AFF, 0x9696FF], pulls: ["Docker","Kubernetes","Terraform"] },
+    { text: "Docker",          color: [0x7A7AFF, 0xA0A0FF], pulls: ["Cloud"] },
+    { text: "Kubernetes",      color: [0x7A7AFF, 0xA0A0FF], pulls: ["Cloud"] },
+    { text: "Terraform",       color: [0x7A7AFF, 0xA0A0FF], pulls: ["Cloud"] },
+    { text: "Linux",           color: [0xAB5A4B, 0xE0937F], pulls: [] },
+    { text: "Python",          color: [0xE6A732, 0xF4CE7E], pulls: [] },
+    { text: "R",               color: [0xE6A732, 0xF4CE7E], pulls: [] },
+    { text: "Visualization",   color: [0xD98CD9, 0xF0BCF0], pulls: ["Vega-Lite","ggplot2","D3.js"] },
+    { text: "Vega-Lite",       color: [0xD98CD9, 0xF3CCF3], pulls: ["Visualization"] },
+    { text: "ggplot2",         color: [0xD98CD9, 0xF3CCF3], pulls: ["Visualization"] },
+    { text: "D3.js",           color: [0xD98CD9, 0xF3CCF3], pulls: ["Visualization"] }
+  ];
+
+  function makeWordSprite(concept){
+    const c = document.createElement('canvas');
+    const ctx = c.getContext('2d');
+    const fontSize = 64;
+    ctx.font = `500 ${fontSize}px 'Fraunces', serif`;
+    const w = Math.ceil(ctx.measureText(concept.text).width) + 40;
+    const h = fontSize * 1.6;
+    c.width = w; c.height = h;
+    ctx.font = `500 ${fontSize}px 'Fraunces', serif`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(concept.text, w/2, h/2);
+
+    const tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    const mat = new THREE.SpriteMaterial({
+      map: tex, transparent: true, depthWrite: false,
+      color: new THREE.Color(concept.color[0])
+    });
+    const sprite = new THREE.Sprite(mat);
+
+    // rozrzut w przestrzeni: różna głębokość (Z), różny rozmiar, różna pozycja
+    const depth = -3.5 - Math.random() * 9;      // dalej = bardziej w tle
+    const spread = 4.6 + (Math.abs(depth) * 0.32);
+    sprite.position.set(
+      (Math.random() - 0.5) * spread * 2,
+      (Math.random() - 0.5) * spread * 1.15,
+      depth
+    );
+    const depthFactor = THREE.MathUtils.clamp((depth + 3.5) / -9, 0, 1); // 0=blisko,1=daleko
+    const baseScale = THREE.MathUtils.lerp(1.0, 0.5, depthFactor) * (w / 220);
+    sprite.scale.set(baseScale * (w/h), baseScale, 1);
+    sprite.userData = {
+      colorNear: new THREE.Color(concept.color[0]),
+      colorFar: new THREE.Color(concept.color[1]),
+      phase: Math.random() * Math.PI * 2,             // własna faza — nigdy nie pulsują razem
+      freq: 0.25 + Math.random() * 0.55,               // własna częstotliwość
+      amp: 0.35 + Math.random() * 0.4,                 // własna amplituda "oddechu"
+      baseOpacity: THREE.MathUtils.lerp(0.95, 0.28, depthFactor), // dalej = bledsze
+      depthFactor,
+      basePos: sprite.position.clone(),
+      text: concept.text,
+      pulls: concept.pulls,
+      pullOffset: new THREE.Vector3()
+    };
+    // dalsze słowa lekko rozmyte: symulujemy blur niższą krycją + lekkim odsunięciem
+    // (prawdziwy blur wymagałby post-processingu; tu podbijamy iluzję głębi opacity+skalą)
+    return sprite;
+  }
+
+  const conceptSpace = new THREE.Group();
+  const wordSprites = CONCEPTS.map(makeWordSprite);
+  wordSprites.forEach(s => conceptSpace.add(s));
+  scene.add(conceptSpace);
+
+  // mapa nazwa -> sprite, do obliczania "grawitacji" (przyciągania powiązanych pojęć)
+  const spriteByName = {};
+  wordSprites.forEach(s => { spriteByName[s.userData.text] = s; });
+
+  const camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+  camera.position.set(0, 0.15, 5.6);
+
+  // Oświetlenie: ciepłe światło kierunkowe + wypełniające ambient +
+  // delikatny rim light od tyłu dla separacji od tła.
+  scene.add(new THREE.AmbientLight(0xfff2e0, 0.55));
+  const key = new THREE.DirectionalLight(0xffe3b0, 1.1);
+  key.position.set(3, 4, 5);
+  scene.add(key);
+  const rim = new THREE.DirectionalLight(0xE6A732, 0.4);
+  rim.position.set(-4, -2, -3);
+  scene.add(rim);
+
+  /* --- Geometria: budujemy czworościan RĘCZNIE jako 4 osobne trójkątne mesh'e
+         (zamiast THREE.TetrahedronGeometry z tablicą materiałów) — w r128
+         PolyhedronGeometry NIE tworzy grup materiałowych per-ścianę, więc
+         wielomateriałowa siatka po prostu się nie renderuje. Osobne mesh'e
+         dają też prostszy, pewny raycasting per-ściana. --- */
+  const R = 1.55;
+  const V = [
+    new THREE.Vector3( R,  R,  R),
+    new THREE.Vector3(-R, -R,  R),
+    new THREE.Vector3(-R,  R, -R),
+    new THREE.Vector3( R, -R, -R)
+  ];
+  // kolejność wierzchołków dobrana tak, by normalne wskazywały na zewnątrz (CCW)
+  const FACE_INDICES = [
+    [2, 1, 0],
+    [0, 3, 2],
+    [1, 3, 0],
+    [2, 3, 1]
+  ];
+  // UV trójkąta — próbkuje trójkątny wycinek kwadratowej tekstury tak,
+  // by wyśrodkowany napis pozostał czytelny na każdej ściance
+  const FACE_UV = [0,0, 1,0, 0.5,1];
+
+  function makeFaceGeometry(idxTriplet){
+    const positions = new Float32Array(9);
+    idxTriplet.forEach((vi, i) => {
+      positions[i*3]   = V[vi].x;
+      positions[i*3+1] = V[vi].y;
+      positions[i*3+2] = V[vi].z;
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(FACE_UV), 2));
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  const rig = new THREE.Group();   // grupa do obrotu całej bryły
+  const tetra = new THREE.Group(); // sama bryła (4 ścian), dziecko rig — dla skalowania hover
+  rig.add(tetra);
+  scene.add(rig);
+
+  const faceMeshes = [];
+  const materials = [];
+
+  CONFIG.faces.forEach((face, i) => {
+    const canvasTex = TEXTURE_FN[face.texture](face);
+    const tex = new THREE.CanvasTexture(canvasTex);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+
+    const mat = new THREE.MeshStandardMaterial({
+      map: tex,
+      roughness: face.roughness,
+      metalness: face.metalness,
+      emissive: new THREE.Color(face.emissive),
+      emissiveIntensity: face.emissiveBase,
+      emissiveMap: tex,
+      side: THREE.DoubleSide // zabezpieczenie: ścianka widoczna niezależnie od winding order
+    });
+    materials.push(mat);
+
+    const geo = makeFaceGeometry(FACE_INDICES[i]);
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.index = i; // do rozpoznania ściany przy raycastingu
+    tetra.add(mesh);
+    faceMeshes.push(mesh);
+
+    // cienka poświatująca krawędź na każdej ściance — bez kosztownego post-processingu
+    const edge = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geo),
+      new THREE.LineBasicMaterial({ color: 0xE6A732, transparent:true, opacity:0.35 })
+    );
+    mesh.add(edge);
+  });
+
+  /* =========================================================================
+     4) RESPONSYWNOŚĆ
+     ========================================================================= */
+  function resize(){
+    const w = window.innerWidth, h = window.innerHeight;
+    renderer.setSize(w, h);
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    // na wąskich ekranach odsuwamy kamerę, żeby bryła nie ucinała się na krawędziach
+    camera.position.z = w < 640 ? 6.6 : 5.6;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* =========================================================================
+     5) INTERAKCJA — hover (jaśnienie ściany), RĘCZNY OBRÓT przeciąganiem,
+        oraz klik/tap (nawigacja do wybranej ściany)
+     ========================================================================= */
+  const raycaster = new THREE.Raycaster();
+  const pointer = new THREE.Vector2(-10,-10); // poza ekranem = brak hovera na starcie
+  let downPos = null;
+
+  // --- stan ręcznego obrotu ---
+  let dragging = false;
+  let lastClient = { x:0, y:0 };
+  let velY = 0, velX = 0;     // "prędkość kątowa" z ostatniego ruchu — daje inercję po puszczeniu
+  let userX = 0;              // pionowe wychylenie ustawione przez użytkownika (oś X), niezależne od "oddechu"
+  let lastInteractionTime = -10; // duża wartość ujemna => autoobrót aktywny od startu
+
+  const DRAG_SENS = 0.0065;   // czułość przeciągania (piksel -> radian)
+  const X_CLAMP = 1.25;       // ogranicza pochylenie, żeby bryła nie "przewracała się" na wprost
+  const INERTIA_DECAY = 0.0025; // im mniejsze, tym szybciej gaśnie zamach po puszczeniu
+  const RESUME_DELAY = 0.5;   // s — ile ciszy, zanim wróci leniwy autoobrót
+  const RESUME_RAMP = 1.4;    // s — jak długo trwa płynne "wjeżdżanie" autoobrotu
+
+  // canvas nie powinien przechwytywać scrolla na dotyku — obrót ma być tylko na bryle
+  canvas.style.touchAction = 'none';
+
+  function setPointerFromEvent(ev){
+    const rect = canvas.getBoundingClientRect();
+    const x = (ev.clientX ?? ev.touches?.[0]?.clientX);
+    const y = (ev.clientY ?? ev.touches?.[0]?.clientY);
+    pointer.x = ((x - rect.left) / rect.width) * 2 - 1;
+    pointer.y = -((y - rect.top) / rect.height) * 2 + 1;
+    return { x, y };
+  }
+
+  function pickFace(){
+    raycaster.setFromCamera(pointer, camera);
+    const hits = raycaster.intersectObjects(faceMeshes);
+    if (hits.length === 0) return -1;
+    return hits[0].object.userData.index;
+  }
+
+  canvas.addEventListener('pointermove', (ev) => {
+    const p = setPointerFromEvent(ev);
+    if (dragging){
+      const dx = p.x - lastClient.x;
+      const dy = p.y - lastClient.y;
+      velY = dx * DRAG_SENS;
+      velX = dy * DRAG_SENS;
+      rig.rotation.y += velY;
+      userX = THREE.MathUtils.clamp(userX + velX, -X_CLAMP, X_CLAMP);
+    }
+    lastClient = p;
+  });
+
+  canvas.addEventListener('pointerleave', () => {
+    if (!dragging) pointer.set(-10,-10);
+  });
+
+  // --- Śledzenie myszy w skali CAŁEGO OKNA: parallax + przechył przestrzeni
+  //     pojęć + strefa "grawitacji" (przyciąganie powiązanych słów) ---
+  const mouseNDC = new THREE.Vector2(0,0);       // -1..1, do przechyłu/paralaksy
+  const mouseWorld = new THREE.Vector2(0,0);     // przybliżona pozycja w jednostkach sceny
+  window.addEventListener('pointermove', (ev) => {
+    mouseNDC.x = (ev.clientX / window.innerWidth) * 2 - 1;
+    mouseNDC.y = -((ev.clientY / window.innerHeight) * 2 - 1);
+    mouseWorld.x = mouseNDC.x * 7;   // przybliżone przeliczenie na "świat" sceny
+    mouseWorld.y = mouseNDC.y * 4;
+  });
+
+  canvas.addEventListener('pointerdown', (ev) => {
+    downPos = setPointerFromEvent(ev);
+    lastClient = downPos;
+    dragging = true;
+    velY = 0; velX = 0;
+    canvas.setPointerCapture?.(ev.pointerId);
+    canvas.style.cursor = 'grabbing';
+  });
+
+  function endDrag(ev){
+    dragging = false;
+    lastInteractionTime = clock.elapsedTime;
+    if (ev?.pointerId != null) canvas.releasePointerCapture?.(ev.pointerId);
+  }
+
+  // --- Delikatny metaliczny "klik" przy wyborze ściany — precyzyjny mechanizm,
+  //     nie sygnał dźwiękowy. Generowany syntetycznie (Web Audio), bez plików.
+  let audioCtx = null;
+  function playClick(){
+    try{
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const t0 = audioCtx.currentTime;
+      // krótki, wysoki "tik" + cichszy metaliczny "ton" tuż po nim
+      const click = audioCtx.createOscillator();
+      const clickGain = audioCtx.createGain();
+      click.type = 'square';
+      click.frequency.setValueAtTime(2200, t0);
+      clickGain.gain.setValueAtTime(0.05, t0);
+      clickGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.045);
+      click.connect(clickGain).connect(audioCtx.destination);
+      click.start(t0); click.stop(t0 + 0.05);
+
+      const tone = audioCtx.createOscillator();
+      const toneGain = audioCtx.createGain();
+      tone.type = 'sine';
+      tone.frequency.setValueAtTime(5200, t0 + 0.008);
+      toneGain.gain.setValueAtTime(0.025, t0 + 0.008);
+      toneGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.09);
+      tone.connect(toneGain).connect(audioCtx.destination);
+      tone.start(t0 + 0.008); tone.stop(t0 + 0.1);
+    }catch(e){ /* Web Audio niedostępne — po prostu bez dźwięku */ }
+  }
+
+  canvas.addEventListener('pointerup', (ev) => {
+    const up = setPointerFromEvent(ev);
+    if (downPos){
+      const moved = Math.hypot(up.x - downPos.x, up.y - downPos.y);
+      if (moved < 6){ // ruch poniżej progu = to był klik/tap, nie obrót
+        const idx = pickFace();
+        if (idx >= 0){
+          playClick();
+          setTimeout(() => { window.location.href = CONFIG.faces[idx].url; }, 110);
+        }
+      }
+    }
+    downPos = null;
+    endDrag(ev);
+  });
+
+  canvas.addEventListener('pointercancel', endDrag);
+
+  /* =========================================================================
+     6) PĘTLA ANIMACJI — leniwy autoobrót, który ustępuje ręcznemu sterowaniu
+        i płynnie wraca po chwili bezczynności, + inercja po puszczeniu
+     ========================================================================= */
+  const clock = new THREE.Clock();
+  const rotSpeed = prefersReducedMotion ? CONFIG.rotationSpeed * 0.15 : CONFIG.rotationSpeed;
+
+  function animate(){
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.1);
+
+    let autoFactor = 0; // 0 = pełna kontrola użytkownika, 1 = pełny leniwy autoobrót
+
+    if (dragging){
+      lastInteractionTime = clock.elapsedTime; // licznik ciszy zeruje się cały czas trwania przeciągania
+    } else {
+      // dokończenie "zamachu" — krótka, naturalna inercja po puszczeniu
+      rig.rotation.y += velY;
+      userX = THREE.MathUtils.clamp(userX + velX, -X_CLAMP, X_CLAMP);
+      const decay = Math.pow(INERTIA_DECAY, dt);
+      velY *= decay; velX *= decay;
+      if (Math.abs(velY) < 0.00005) velY = 0;
+      if (Math.abs(velX) < 0.00005) velX = 0;
+
+      // leniwy autoobrót wraca płynnie dopiero po chwili ciszy
+      const idle = clock.elapsedTime - lastInteractionTime;
+      autoFactor = THREE.MathUtils.clamp((idle - RESUME_DELAY) / RESUME_RAMP, 0, 1);
+      rig.rotation.y += rotSpeed * dt * autoFactor;
+    }
+
+    // delikatny "oddech" na osi X — obecny tylko, gdy nikt nie trzyma bryły w ręku
+    rig.rotation.x = userX + Math.sin(clock.elapsedTime * 0.18) * 0.12 * autoFactor;
+
+    // hover: podświetl trafioną ścianę, wygaś pozostałe (nie przeszkadza w przeciąganiu)
+    const idx = pickFace();
+    if (!dragging){
+      canvas.style.cursor = idx >= 0 ? 'pointer' : 'grab';
+    }
+
+    materials.forEach((mat, i) => {
+      const base = CONFIG.faces[i].emissiveBase;
+      const target = (i === idx) ? base + 0.55 : base;
+      mat.emissiveIntensity += (target - mat.emissiveIntensity) * CONFIG.hoverLerp;
+    });
+
+    // delikatne "oddychające" skalowanie trafionej ściany całej bryły (subtelne)
+    const targetScale = idx >= 0 ? 1.03 : 1.0;
+    tetra.scale.x += (targetScale - tetra.scale.x) * 0.15;
+    tetra.scale.y += (targetScale - tetra.scale.y) * 0.15;
+    tetra.scale.z += (targetScale - tetra.scale.z) * 0.15;
+
+    /* =======================================================================
+       PRZESTRZEŃ POJĘĆ — każde słowo oddycha własnym rytmem (nigdy razem),
+       zbliżone do myszy pojęcia "przyciągają" swoich krewnych (grawitacja),
+       a cała przestrzeń delikatnie przechyla się jak szyba, nie obraca.
+       ======================================================================= */
+    const t = clock.elapsedTime;
+
+    // przechył całej przestrzeni pojęć — subtelny, jak patrzenie przez szybę
+    conceptSpace.rotation.y += (mouseNDC.x * 0.06 - conceptSpace.rotation.y) * 0.04;
+    conceptSpace.rotation.x += (-mouseNDC.y * 0.045 - conceptSpace.rotation.x) * 0.04;
+
+    wordSprites.forEach(sprite => {
+      const d = sprite.userData;
+
+      // własny oddech: faza + częstotliwość + amplituda — nigdy zsynchronizowane
+      const breath = (Math.sin(t * d.freq + d.phase) + 1) / 2; // 0..1
+      const glow = breath * d.amp;
+
+      // temperatura koloru "oddycha" między dwoma odcieniami tego słowa
+      sprite.material.color.copy(d.colorNear).lerp(d.colorFar, glow);
+      sprite.material.opacity = d.baseOpacity * (0.72 + glow * 0.28);
+
+      // subtelny parallax (2-3px w jednostkach sceny) względem pozycji myszy —
+      // silniejszy dla bliższych (mniej dla dalekich = złudzenie głębi)
+      const parallaxStrength = (1 - d.depthFactor) * 0.06;
+      const px = mouseNDC.x * parallaxStrength;
+      const py = mouseNDC.y * parallaxStrength * 0.6;
+
+      // "grawitacja" — gdy kursor (w jednostkach świata) jest blisko słowa
+      // powiązanego z innym, przesuwa lekko powiązane słowa ku sobie
+      const distToMouse = Math.hypot(sprite.position.x - mouseWorld.x, sprite.position.y - mouseWorld.y);
+      const attractRadius = 2.6;
+      let pullTargetX = 0, pullTargetY = 0;
+
+      if (distToMouse < attractRadius && d.pulls.length){
+        const strength = (1 - distToMouse / attractRadius) * 0.55;
+        d.pulls.forEach(name => {
+          const other = spriteByName[name];
+          if (!other) return;
+          pullTargetX += (other.userData.basePos.x - d.basePos.x) * strength * 0.18;
+          pullTargetY += (other.userData.basePos.y - d.basePos.y) * strength * 0.18;
+        });
+      }
+      d.pullOffset.x += (pullTargetX - d.pullOffset.x) * 0.06;
+      d.pullOffset.y += (pullTargetY - d.pullOffset.y) * 0.06;
+
+      sprite.position.x = d.basePos.x + px + d.pullOffset.x;
+      sprite.position.y = d.basePos.y + py + d.pullOffset.y;
+    });
+
+    renderer.render(scene, camera);
+  }
+
+  animate();
+  runIntro();
+
+})();
+
+</script>
+</body>
+</html>

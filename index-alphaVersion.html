@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Semantyczna Przestrzeń Pojęć - Korekta Akustyki i Kinetyki</title>
+    <style>
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #02020a; 
+            cursor: grab; 
+            user-select: none;
+        }
+        body:active { cursor: grabbing; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+<script>
+    // --- Syntetyzator Dźwięku (Web Audio API) ---
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    let audioCtx = null;
+    function initAudio() { if (!audioCtx) audioCtx = new AudioCtx(); }
+
+    function playSwooshSound() {
+        if (!audioCtx) return;
+        const bufferSize = audioCtx.sampleRate * 0.4;
+        const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+        const data = buffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+        const noise = audioCtx.createBufferSource();
+        noise.buffer = buffer;
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(1000, audioCtx.currentTime);
+        filter.frequency.exponentialRampToValueAtTime(300, audioCtx.currentTime + 0.4);
+        filter.Q.setValueAtTime(3, audioCtx.currentTime);
+        const gain = audioCtx.createGain();
+        gain.gain.setValueAtTime(0.06, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+        noise.connect(filter); filter.connect(gain); gain.connect(audioCtx.destination);
+        noise.start();
+    }
+
+    // PRZYWRÓCONE: Precyzyjne, potrójne kliknięcie mechaniczne zapinki zegarka
+    function playWatchClickSound() {
+        if (!audioCtx) return;
+        const t = audioCtx.currentTime;
+        [t, t + 0.008, t + 0.02].forEach((time, index) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'triangle';
+            osc.frequency.setValueAtTime(index === 2 ? 5400 : 7000, time); 
+            gain.gain.setValueAtTime(index === 0 ? 0.03 : 0.015, time);
+            gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.015);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(time); osc.stop(time + 0.02);
+        });
+    }
+
+    function playExplosionWaveSound() {
+        if (!audioCtx) return;
+        const now = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(140, now);
+        osc.frequency.exponentialRampToValueAtTime(32, now + 0.5);
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.6);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(now); osc.stop(now + 0.6);
+    }
+
+    window.addEventListener('click', initAudio, { once: true });
+
+    // --- Baza Słów ---
+    const wordsConfig = [
+        { text: "AI", group: "ai", isCenter: true, colorStart: "#A3DDFF", colorEnd: "#E3F5FF" },
+        { text: "Cloud", group: "cloud", isCenter: true, colorStart: "#9494FF", colorEnd: "#C2C2FF" },
+        { text: "Bioinformatics", group: "bio", isCenter: true, colorStart: "#82E69F", colorEnd: "#CBF7D9" },
+        { text: "Visualization", group: "vis", isCenter: true, colorStart: "#FFD042", colorEnd: "#FFE79A" },
+
+        { text: "Machine Learning", group: "ai", isCenter: false, colorStart: "#A3DDFF", colorEnd: "#CBE9FF" },
+        { text: "TensorFlow", group: "ai", isCenter: false, colorStart: "#A3DDFF", colorEnd: "#CBE9FF" },
+        { text: "PyTorch", group: "ai", isCenter: false, colorStart: "#A3DDFF", colorEnd: "#CBE9FF" },
+        { text: "Explainability", group: "ai", isCenter: false, colorStart: "#A3DDFF", colorEnd: "#CBE9FF" },
+
+        { text: "Docker", group: "cloud", isCenter: false, colorStart: "#9494FF", colorEnd: "#D1D1FF" },
+        { text: "Kubernetes", group: "cloud", isCenter: false, colorStart: "#9494FF", colorEnd: "#D1D1FF" },
+        { text: "Terraform", group: "cloud", isCenter: false, colorStart: "#9494FF", colorEnd: "#D1D1FF" },
+        { text: "Linux", group: "cloud", isCenter: false, colorStart: "#9494FF", colorEnd: "#D1D1FF" },
+
+        { text: "Genomics", group: "bio", isCenter: false, colorStart: "#82E69F", colorEnd: "#DFFCE8" },
+        { text: "Computational Biology", group: "bio", isCenter: false, colorStart: "#82E69F", colorEnd: "#DFFCE8" },
+        { text: "Python", group: "bio", isCenter: false, colorStart: "#82E69F", colorEnd: "#DFFCE8" },
+        { text: "R", group: "bio", isCenter: false, colorStart: "#82E69F", colorEnd: "#DFFCE8" },
+
+        { text: "Vega-Lite", group: "vis", isCenter: false, colorStart: "#FFD042", colorEnd: "#FFF0C2" },
+        { text: "ggplot2", group: "vis", isCenter: false, colorStart: "#FFD042", colorEnd: "#FFF0C2" },
+        { text: "D3.js", group: "vis", isCenter: false, colorStart: "#FFD042", colorEnd: "#FFF0C2" },
+
+        { text: "Resilience", group: "none", isCenter: false, colorStart: "#EAEAEA", colorEnd: "#FFFFFF" }
+    ];
+
+    // --- Konfiguracja Three.js ---
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x02020a);
+
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
+    camera.position.set(0, 4, 8);
+    camera.lookAt(0, 0.3, 0);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const parallaxGroup = new THREE.Group();
+    scene.add(parallaxGroup);
+
+    // --- Czworościan ---
+    const s = 2.0;                      
+    const h = s * Math.sqrt(3) / 2;     
+    const r_in = h / 3;                 
+    const r_out = h * 2 / 3;             
+    const H3D = s * Math.sqrt(6) / 3;   
+
+    const A = new THREE.Vector3(0, 0, -r_out);       
+    const B = new THREE.Vector3(-s / 2, 0, r_in);    
+    const C = new THREE.Vector3(s / 2, 0, r_in);     
+    const tipDolnyFlat = new THREE.Vector3(0, 0, r_in + h);
+    const tipLewyFlat  = new THREE.Vector3(-s, 0, -r_out);
+    const tipPrawyFlat = new THREE.Vector3(s, 0, -r_out);
+    const tipTarget3D  = new THREE.Vector3(0, H3D, 0);
+
+    const targetScale = 1.6 + Math.random() * 0.2; 
+    const tetCenter = new THREE.Vector3(0, 0.4, 0);
+
+    const amberColor = 0xFFBF00;
+    
+    function createFaceTexture(numberString) {
+        const canvas = document.createElement('canvas');
+        canvas.width = 256;
+        canvas.height = 256;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, 256, 256);
+        ctx.fillStyle = "#FFBF00";
+        ctx.font = "bold 85px Georgia, serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.shadowColor = "#FFBF00"; ctx.shadowBlur = 15;
+        ctx.fillText(numberString, 128, 145); 
+        return new THREE.CanvasTexture(canvas);
+    }
+
+    const uvCoords = new Float32Array([0.5, 1.0, 0.0, 0.0, 1.0, 0.0]);
+
+    const faceGeometries = Array.from({ length: 4 }, () => {
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(3 * 3), 3));
+        geo.setAttribute('uv', new THREE.BufferAttribute(uvCoords, 2));
+        return geo;
+    });
+
+    const faceMaterials = ["1", "2", "3", "4"].map(num => new THREE.MeshBasicMaterial({
+        color: 0x2a2b30, map: createFaceTexture(num), transparent: true, opacity: 0.85, side: THREE.DoubleSide
+    }));
+
+    const wireframeMaterial = new THREE.MeshBasicMaterial({ color: amberColor, wireframe: true, transparent: true, opacity: 0.8 });
+
+    const tetGroup = new THREE.Group();
+    const faceMeshes = [];
+
+    for (let i = 0; i < 4; i++) {
+        const fMesh = new THREE.Mesh(faceGeometries[i], faceMaterials[i]);
+        fMesh.renderOrder = 2;
+        const wMesh = new THREE.Mesh(faceGeometries[i], wireframeMaterial);
+        wMesh.renderOrder = 3;
+        fMesh.add(wMesh);
+        tetGroup.add(fMesh);
+        faceMeshes.push(fMesh);
+    }
+    parallaxGroup.add(tetGroup);
+
+    const currentPoints = Array.from({length: 12}, () => new THREE.Vector3());
+
+    // --- System Linii Sieci Semantycznej ---
+    const networkLineGeometry = new THREE.BufferGeometry();
+    const linePositions = new Float32Array(200 * 3); 
+    networkLineGeometry.setAttribute('position', new THREE.BufferAttribute(linePositions, 3));
+    
+    const networkLineMaterial = new THREE.LineBasicMaterial({
+        color: 0xd1d5db,
+        transparent: true,
+        opacity: 0.0, 
+        linewidth: 1  
+    });
+    const networkLineSegments = new THREE.LineSegments(networkLineGeometry, networkLineMaterial);
+    networkLineSegments.renderOrder = 0; 
+    parallaxGroup.add(networkLineSegments);
+
+    // --- Chmura Słów ---
+    const textObjects = [];
+    const raycastTargets = [];
+
+    function generateNonOverlappingPosition(existingObjects) {
+        let attempts = 0;
+        const minDistance = 1.5; 
+        while (attempts < 300) {
+            const pos = new THREE.Vector3(
+                (Math.random() - 0.5) * 6.5,
+                (Math.random() - 0.5) * 3.0 + 0.5,
+                (Math.random() - 0.5) * 4.0
+            );
+            if (pos.distanceTo(tetCenter) < 1.6) { attempts++; continue; }
+            let valid = true;
+            for (let i = 0; i < existingObjects.length; i++) {
+                if (pos.distanceTo(existingObjects[i].pos) < minDistance) { valid = false; break; }
+            }
+            if (valid) return pos;
+            attempts++;
+        }
+        return new THREE.Vector3((Math.random() - 0.5) * 5, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 3);
+    }
+
+    wordsConfig.forEach((cfg) => {
+        const assignedPos = generateNonOverlappingPosition(textObjects);
+        const randomSize = cfg.isCenter ? (42 + Math.floor(Math.random() * 8)) : (28 + Math.floor(Math.random() * 8));
+
+        const wordData = {
+            text: cfg.text,
+            group: cfg.group.toLowerCase(),
+            isCenter: cfg.isCenter,
+            baseSize: randomSize,
+            colorStart: new THREE.Color(cfg.colorStart),
+            colorEnd: new THREE.Color(cfg.colorEnd),
+            phase: Math.random() * Math.PI * 2,
+            amplitude: 0.25 + Math.random() * 0.25, 
+            frequency: 0.8 + Math.random() * 0.6,    
+            pos: assignedPos,
+            originalPos: assignedPos.clone(), 
+            spawnPos: assignedPos.clone(), 
+            driftSpeed: new THREE.Vector3(
+                (Math.random() - 0.5) * 0.003,
+                (Math.random() - 0.5) * 0.002,
+                (Math.random() - 0.5) * 0.003
+            ),
+            hovered: false,
+            jumpTime: 0
+        };
+
+        const canvas = document.createElement('canvas');
+        canvas.width = 512;
+        canvas.height = 128;
+        const ctx = canvas.getContext('2d');
+
+        const texture = new THREE.CanvasTexture(canvas);
+        const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, side: THREE.DoubleSide, depthWrite: false });
+        const planeGeo = new THREE.PlaneGeometry(1.8, 0.45);
+        const planeMesh = new THREE.Mesh(planeGeo, material);
+        planeMesh.renderOrder = 4; 
+        planeMesh.position.copy(wordData.pos);
+        parallaxGroup.add(planeMesh);
+
+        wordData.mesh = planeMesh;
+        wordData.canvas = canvas;
+        wordData.ctx = ctx;
+        wordData.texture = texture;
+
+        textObjects.push(wordData);
+        raycastTargets.push(planeMesh);
+    });
+
+    textObjects.forEach((word) => {
+        if (!word.isCenter && word.group !== "none") {
+            const groupSatelites = textObjects.filter(w => w.group === word.group && !w.isCenter);
+            word.orbitIndex = groupSatelites.indexOf(word);
+            word.orbitCount = groupSatelites.length;
+        }
+    });
+
+    // --- Kontrola Myszki ---
+    const windowMouse = { x: 0, y: 0 };
+    let isDragging = false;
+    let mouseMoved = false; 
+    let previousPointerPosition = { x: e => e.clientX, y: e => e.clientY };
+    const userRotation = { x: 0, y: 0 };
+
+    const raycaster = new THREE.Raycaster();
+    const ndcMouse = new THREE.Vector2();
+    let lockedWord = null; 
+    let hoveredMesh = null; 
+
+    window.addEventListener('pointerdown', (e) => {
+        initAudio();
+        isDragging = true;
+        previousPointerPosition = { x: e.clientX, y: e.clientY };
+        
+        if(!mouseMoved) return;
+
+        ndcMouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        ndcMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        raycaster.setFromCamera(ndcMouse, camera);
+
+        // 1. Sprawdzamy intersekcję słów
+        const textIntersects = raycaster.intersectObjects(raycastTargets);
+        if (textIntersects.length > 0) {
+            const clickedMesh = textIntersects[0].object;
+            const word = textObjects.find(w => w.mesh === clickedMesh);
+            if (word) {
+                playSwooshSound();
+                console.log(`Mock: /blog/tags/${word.text.toLowerCase().replace(/[^a-z0-9]/g, "-")}`);
+                return; 
+            }
+        }
+
+        // 2. KOREKTA: Przywrócenie pełnej mechaniki zapinki zegarka przy kliknięciu w ściany
+        const tetIntersects = raycaster.intersectObjects(faceMeshes);
+        if (tetIntersects.length > 0) {
+            playWatchClickSound(); // Precyzyjny metaliczny dźwięk powrócił!
+            console.log("Mock: /architecture-models");
+            return;
+        }
+
+        // 3. Kliknięcie w pustą przestrzeń -> Epicentrum
+        playExplosionWaveSound(); 
+        
+        const vector = new THREE.Vector3(ndcMouse.x, ndcMouse.y, 0.5).unproject(camera);
+        const dir = vector.sub(camera.position).normalize();
+        const distance = -camera.position.z / dir.z;
+        const epicentrum = camera.position.clone().add(dir.multiplyScalar(distance));
+
+        textObjects.forEach((word) => {
+            const distanceToEpicentrum = word.pos.distanceTo(epicentrum);
+            if (distanceToEpicentrum < 4.2) {
+                const pushDirection = new THREE.Vector3().subVectors(word.pos, epicentrum).normalize();
+                const shockForce = (4.2 - distanceToEpicentrum) * 0.5;
+                word.pos.addScaledVector(pushDirection, shockForce);
+                word.originalPos.addScaledVector(pushDirection, shockForce * 0.5);
+            }
+        });
+    });
+
+    window.addEventListener('pointermove', (e) => {
+        mouseMoved = true; 
+        ndcMouse.x = (e.clientX / window.innerWidth) * 2 - 1;
+        ndcMouse.y = -(e.clientY / window.innerHeight) * 2 + 1;
+        windowMouse.x = ndcMouse.x * 0.25;
+        windowMouse.y = ndcMouse.y * 0.15;
+
+        if (isDragging) {
+            const deltaMove = { x: e.clientX - previousPointerPosition.x, y: e.clientY - previousPointerPosition.y };
+            userRotation.y += deltaMove.x * 0.007; userRotation.x += deltaMove.y * 0.007;
+            previousPointerPosition = { x: e.clientX, y: e.clientY };
+        }
+    });
+
+    window.addEventListener('pointerup', () => isDragging = false);
+    window.addEventListener('pointerleave', () => { isDragging = false; mouseMoved = false; });
+
+    // --- Pętla animacji ---
+    const clock = new THREE.Clock();
+    let lastScatterTime = 0; 
+    let hasTriggeredZoomOutExplosion = false; // Flaga jednorazowego impulsu radialnego przy kulminacji najazdu
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const time = clock.getElapsedTime();
+        let foldProgress = 0;
+        let scaleProgress = 0;
+        let currentGroupScale = 1.0;
+
+        if (time < 1.0) {
+            foldProgress = 0;
+            tetGroup.scale.set(1, 1, 1);
+        } else if (time >= 1.0 && time < 2.0) {
+            const t2 = time - 1.0;
+            const shakeY = (Math.sin(t2 * Math.PI * 14) * 0.05 + 0.05) * t2;
+            foldProgress = 0;
+            currentPoints[5].y = shakeY; currentPoints[8].y = shakeY; currentPoints[11].y = shakeY;
+            tetGroup.scale.set(1, 1, 1);
+        } else if (time >= 2.0 && time < 3.0) {
+            let p = time - 2.0;
+            foldProgress = p * p * (3 - 2 * p);
+            tetGroup.scale.set(1, 1, 1);
+        } else if (time >= 3.0 && time < 4.0) {
+            foldProgress = 1.0;
+            let pScale = time - 3.0;
+            scaleProgress = pScale * pScale * (3 - 2 * pScale);
+            currentGroupScale = THREE.MathUtils.lerp(1.0, targetScale, scaleProgress);
+            tetGroup.scale.set(currentGroupScale, currentGroupScale, currentGroupScale);
+        } else {
+            foldProgress = 1.0;
+            currentGroupScale = targetScale;
+            tetGroup.scale.set(targetScale, targetScale, targetScale);
+            
+            // [NOWOŚĆ] KOREKTA KINETYKI: Potężny impuls radialny rozpychający bazy dryfu dokładnie na przełomie 4. sekundy (Koniec najazdu bryły)
+            if (!hasTriggeredZoomOutExplosion) {
+                textObjects.forEach((word) => {
+                    const pushDir = new THREE.Vector3().subVectors(word.pos, tetCenter).normalize();
+                    const force = 1.45; // Silne rozepchnięcie po ukończeniu formowania struktury
+                    word.pos.addScaledVector(pushDir, force);
+                    word.originalPos.addScaledVector(pushDir, force * 0.9);
+                });
+                hasTriggeredZoomOutExplosion = true;
+            }
+
+            if (isDragging) {
+                tetGroup.rotation.x = userRotation.x; tetGroup.rotation.y = userRotation.y;
+            } else {
+                tetGroup.rotation.x += 0.004; tetGroup.rotation.y += 0.006;
+                userRotation.x = tetGroup.rotation.x; userRotation.y = tetGroup.rotation.y;
+            }
+        }
+
+        currentPoints[0].copy(A); currentPoints[1].copy(B); currentPoints[2].copy(C);
+        currentPoints[3].copy(C); currentPoints[4].copy(B);
+        if (time < 1.0 || time >= 2.0) currentPoints[5].lerpVectors(tipDolnyFlat, tipTarget3D, foldProgress);
+        currentPoints[6].copy(B); currentPoints[7].copy(A);
+        if (time < 1.0 || time >= 2.0) currentPoints[8].lerpVectors(tipLewyFlat, tipTarget3D, foldProgress);
+        currentPoints[9].copy(A); currentPoints[10].copy(C);
+        if (time < 1.0 || time >= 2.0) currentPoints[11].lerpVectors(tipPrawyFlat, tipTarget3D, foldProgress);
+
+        const f0 = faceGeometries[0].attributes.position.array;
+        f0[0] = currentPoints[0].x; f0[1] = currentPoints[0].y; f0[2] = currentPoints[0].z;
+        f0[3] = currentPoints[1].x; f0[4] = currentPoints[1].y; f0[5] = currentPoints[1].z;
+        f0[6] = currentPoints[2].x; f0[7] = currentPoints[2].y; f0[8] = currentPoints[2].z;
+
+        const f1 = faceGeometries[1].attributes.position.array;
+        f1[0] = currentPoints[3].x; f1[1] = currentPoints[3].y; f1[2] = currentPoints[3].z;
+        f1[3] = currentPoints[4].x; f1[4] = currentPoints[4].y; f1[5] = currentPoints[4].z;
+        f1[6] = currentPoints[5].x; f1[7] = currentPoints[5].y; f1[8] = currentPoints[5].z;
+
+        const f2 = faceGeometries[2].attributes.position.array;
+        f2[0] = currentPoints[6].x; f2[1] = currentPoints[6].y; f2[2] = currentPoints[6].z;
+        f2[3] = currentPoints[7].x; f2[4] = currentPoints[7].y; f2[5] = currentPoints[7].z;
+        f2[6] = currentPoints[8].x; f2[7] = currentPoints[8].y; f2[8] = currentPoints[8].z;
+
+        const f3 = faceGeometries[3].attributes.position.array;
+        f3[0] = currentPoints[9].x; f3[1] = currentPoints[9].y; f3[2] = currentPoints[9].z;
+        f3[3] = currentPoints[10].x; f3[4] = currentPoints[10].y; f3[5] = currentPoints[10].z;
+        f3[6] = currentPoints[11].x; f3[7] = currentPoints[11].y; f3[8] = currentPoints[11].z;
+
+        faceGeometries.forEach(geo => geo.attributes.position.needsUpdate = true);
+
+        parallaxGroup.rotation.y += (windowMouse.x - parallaxGroup.rotation.y) * 0.05;
+        parallaxGroup.rotation.x += (-windowMouse.y - parallaxGroup.rotation.x) * 0.05;
+
+        if (mouseMoved) {
+            raycaster.setFromCamera(ndcMouse, camera);
+            if (lockedWord) {
+                const intersectObj = raycaster.intersectObject(lockedWord.mesh);
+                if (intersectObj.length > 0) hoveredMesh = lockedWord.mesh;
+                else lockedWord = null;
+            }
+            if (!lockedWord) {
+                const currentIntersects = raycaster.intersectObjects(raycastTargets);
+                if (currentIntersects.length > 0) {
+                    hoveredMesh = currentIntersects[0].object;
+                    lockedWord = textObjects.find(w => w.mesh === hoveredMesh);
+                } else {
+                    hoveredMesh = null;
+                }
+            }
+        }
+
+        let activeGroupContext = "none";
+        let centerWordRef = null;
+        if (hoveredMesh) {
+            const activeWord = textObjects.find(w => w.mesh === hoveredMesh);
+            if (activeWord) {
+                activeGroupContext = activeWord.group;
+                centerWordRef = textObjects.find(w => w.group === activeGroupContext && w.isCenter);
+            }
+        }
+
+        const dynamicCollisionRadius = 1.15 * currentGroupScale;
+        const activeLineVertices = [];
+
+        let triggerPeriodicScatter = false;
+        if (time - lastScatterTime > 6.0 && time > 4.5) {
+            triggerPeriodicScatter = true;
+            lastScatterTime = time;
+        }
+
+        // --- Aktualizacja Słów ---
+        textObjects.forEach((word) => {
+            const wasHovered = word.hovered;
+            word.hovered = (word.mesh === hoveredMesh);
+
+            if (word.hovered && !wasHovered) word.jumpTime = time; 
+
+            const isInActiveContext = (word.group === activeGroupContext && activeGroupContext !== "none");
+
+            if (word.hovered) {
+                // Stop dryfu
+            } else if (centerWordRef && isInActiveContext && !word.isCenter) {
+                const angle = (word.orbitIndex / word.orbitCount) * Math.PI * 2 + time * 0.2;
+                const radius = 1.1;
+                const orbitTarget = new THREE.Vector3(
+                    centerWordRef.pos.x + Math.cos(angle) * radius,
+                    centerWordRef.pos.y + Math.sin(angle) * radius,
+                    centerWordRef.pos.z + (word.orbitIndex - word.orbitCount/2) * 0.1 
+                );
+                word.pos.lerp(orbitTarget, 0.05);
+            } else {
+                if (triggerPeriodicScatter) {
+                    const scatterDir = new THREE.Vector3((Math.random() - 0.5) * 1.5, (Math.random() - 0.5) * 0.8, (Math.random() - 0.5) * 1.0);
+                    word.originalPos.add(scatterDir);
+                    word.originalPos.lerp(word.spawnPos, 0.15);
+                }
+
+                // 1. Pierwsza fala (Składanie płatków 2s -> 3s)
+                if (time >= 2.0 && time < 3.0) {
+                    const distToCenter = word.pos.distanceTo(tetCenter);
+                    if (distToCenter < 2.5) {
+                        const pushDir = new THREE.Vector3().subVectors(word.pos, tetCenter).normalize();
+                        const force = (2.5 - distToCenter) * 0.12;
+                        word.pos.addScaledVector(pushDir, force);
+                        word.originalPos.addScaledVector(pushDir, force); 
+                    }
+                }
+
+                // 2. Druga fala (Powiększanie bryły 3s -> 4s)
+                if (time >= 3.0 && time < 4.0) {
+                    const distToCenter = word.pos.distanceTo(tetCenter);
+                    const activePushZone = dynamicCollisionRadius + 0.5;
+                    if (distToCenter < activePushZone) {
+                        const pushDir = new THREE.Vector3().subVectors(word.pos, tetCenter).normalize();
+                        const force = (activePushZone - distToCenter) * 0.22; 
+                        word.pos.addScaledVector(pushDir, force);
+                        word.originalPos.addScaledVector(pushDir, force); 
+                    }
+                }
+
+                // 3. Ciągły sferyczny collider 3D (Od 4. sekundy)
+                if (time >= 4.0) {
+                    const distToCenter = word.pos.distanceTo(tetCenter);
+                    if (distToCenter < dynamicCollisionRadius) {
+                        const pushDir = new THREE.Vector3().subVectors(word.pos, tetCenter).normalize();
+                        word.pos.copy(tetCenter).addScaledVector(pushDir, dynamicCollisionRadius + 0.05);
+                        word.originalPos.copy(word.pos);
+                    }
+                }
+
+                word.pos.lerp(word.originalPos, 0.03);
+                word.pos.add(word.driftSpeed);
+                word.originalPos.add(word.driftSpeed);
+
+                if (word.pos.z > 4.0)  { word.pos.z = -5.0; word.originalPos.z = -5.0; }
+                if (word.pos.z < -5.0) { word.pos.z = 4.0;  word.originalPos.z = 4.0; }
+                if (word.pos.x > 6.0)  { word.pos.x = -6.0; word.originalPos.x = -6.0; }
+                if (word.pos.x < -6.0) { word.pos.x = 6.0;  word.originalPos.x = 6.0; }
+            }
+
+            let targetX = word.pos.x; let targetY = word.pos.y; let targetZ = word.pos.z;
+            if (isInActiveContext && !word.hovered) targetZ += 0.2; 
+            if (word.hovered) targetZ += 0.3; 
+
+            if (word.hovered) {
+                const elapsedJump = time - word.jumpTime;
+                if (elapsedJump < 0.6) targetY += Math.sin(elapsedJump * Math.PI * 2.5) * 0.25 * (1.0 - elapsedJump);
+            }
+
+            word.mesh.position.z += (targetZ - word.mesh.position.z) * 0.1;
+            word.mesh.position.x += (targetX - word.mesh.position.x) * 0.1;
+            word.mesh.position.y += (targetY - word.mesh.position.y) * 0.1;
+
+            word.mesh.quaternion.copy(camera.quaternion);
+
+            if (isInActiveContext && centerWordRef && word !== centerWordRef) {
+                activeLineVertices.push(word.mesh.position.x, word.mesh.position.y, word.mesh.position.z);
+                activeLineVertices.push(centerWordRef.mesh.position.x, centerWordRef.mesh.position.y, centerWordRef.mesh.position.z);
+            }
+
+            const distanceToCam = word.mesh.position.distanceTo(camera.position);
+            let opacityFactor = THREE.MathUtils.mapLinear(distanceToCam, 3, 11, 1.0, 0.5);
+            opacityFactor = THREE.MathUtils.clamp(opacityFactor, 0.45, 1.0);
+
+            if (isInActiveContext || word.hovered) opacityFactor = 1.0;
+
+            const localClock = time * word.frequency + word.phase;
+            const pulse = (Math.sin(localClock) * 0.5 + 0.5); 
+            
+            const blendedColor = word.colorStart.clone().lerp(word.colorEnd, pulse * word.amplitude);
+            const cssColor = "#" + blendedColor.getHexString();
+
+            const ctx = word.ctx;
+            ctx.clearRect(0, 0, 512, 128);
+            ctx.filter = 'none';
+            ctx.fillStyle = cssColor;
+            ctx.font = `bold ${word.baseSize}px Georgia, Times New Roman, serif`;
+            ctx.textAlign = "center"; ctx.textBaseline = "middle";
+            ctx.shadowColor = cssColor;
+            ctx.shadowBlur = (word.hovered || isInActiveContext) ? 28 : Math.floor(pulse * 14 + 4);
+
+            ctx.fillText(word.text, 256, 64);
+            word.mesh.material.opacity = opacityFactor;
+            word.texture.needsUpdate = true;
+        });
+
+        if (activeLineVertices.length > 0) {
+            const linePosAttr = networkLineGeometry.attributes.position.array;
+            let lIdx = 0;
+            for (let i = 0; i < activeLineVertices.length; i++) {
+                linePosAttr[i] = activeLineVertices[i];
+                lIdx++;
+            }
+            for (let i = lIdx; i < linePosAttr.length; i++) { 
+                linePosAttr[i] = 0; 
+            }
+            networkLineGeometry.attributes.position.needsUpdate = true;
+            networkLineGeometry.setDrawRange(0, activeLineVertices.length / 3);
+            networkLineMaterial.opacity += (0.45 - networkLineMaterial.opacity) * 0.15;
+        } else {
+            networkLineMaterial.opacity += (0.0 - networkLineMaterial.opacity) * 0.2;
+        }
+
+        renderer.render(scene, camera);
+    }
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight; camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+
+    animate();
+</script>
+
+</body>
+</html>
